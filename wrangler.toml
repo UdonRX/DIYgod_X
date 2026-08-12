@@ -3,7 +3,7 @@ main = "dist-worker/worker.mjs"
 compatibility_date = "2025-06-17"
 compatibility_flags = ["nodejs_compat"]
 
-# コードを縮小・圧縮してファイルサイズを3 MiB以下に削減する設定
+# コードを縮小・圧縮してファイルサイズを削減する設定
 minify = true
 
 # Serve static assets from lib/assets
@@ -11,6 +11,11 @@ assets = { directory = "lib/assets" }
 
 [build]
 command = "pnpm run worker-build"
+
+# モジュールのアップロードルールの明確化
+[[rules]]
+type = "ESModule"
+globs = ["**/*.mjs", "**/*.js"]
 
 [observability]
 enabled = true
@@ -20,5 +25,4 @@ enabled = true
 binding = "CACHE"
 
 [vars]
-# Environment variables can be set here or via wrangler secret
 # DEBUG_INFO = "false"
