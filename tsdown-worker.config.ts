@@ -94,6 +94,9 @@ export default defineConfig({
     deps: {
         onlyBundle: false,
         neverBundle: [
+            // Cloudflare Workers 固有モジュールおよび不要なライブラリを除外
+            /^cloudflare:/,
+            '@cloudflare/playwright',
             // Exclude non-code files that might be accidentally imported
             /\/_README$/,
             /\.node$/,
