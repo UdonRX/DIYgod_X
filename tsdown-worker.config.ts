@@ -10,6 +10,10 @@ export default defineConfig({
     treeshake: true,
     codeSplitting: true,
     copy: ['lib/assets'],
+    // ネームスペース付きJSX（<itunes:author> 等）の警告・エラーを抑制
+    jsx: {
+        throwIfNamespace: false,
+    },
     deps: {
         onlyBundle: false,
     },
