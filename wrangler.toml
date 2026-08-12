@@ -20,5 +20,11 @@ enabled = true
 binding = "CACHE"
 
 [vars]
+
+{
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}
 # Environment variables can be set here or via wrangler secret
 # DEBUG_INFO = "false"
