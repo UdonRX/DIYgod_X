@@ -7,14 +7,12 @@ export default defineConfig({
     minify: true,
     shims: true,
     clean: true,
-    treeshake: true, // 不要なコードを完全に除去
-    codeSplitting: true, // コード分割を有効化して巨大ファイルを分散
+    treeshake: true,
+    codeSplitting: true,
     copy: ['lib/assets'],
-    // 依存関係の扱いを調整（Worker環境で不要な重いライブラリをバンドルから外す）
     deps: {
         onlyBundle: false,
     },
-    // Node.js固有の重いモジュールやWorker非対応パッケージを外す場合はここに指定
     external: [
         'jsdom',
         'canvas',
@@ -22,15 +20,18 @@ export default defineConfig({
         'patchright',
     ],
     outputOptions: {
-        chunkFileNames(chunk) {
-            let namespace = chunk.facadeModuleId ? namespaceOf(chunk.facadeModuleId) : undefined;
-            if (!namespace) {
-                const namespaces = new Set(chunk.moduleIds.map((id) => namespaceOf(id)));
-                if (namespaces.size === 1) {
-                    namespace = [...namespaces][0];
-                }
+        // 細かくなりすぎたモジュールをディレクトリ単位や機能単位で結合する
+        manualChunks(id) {
+            // node_modules の共通依存関係を1つ（または数個）のvendorファイルに集約
+            if (id.includes('node_modules')) {
+                return 'vendor';
             }
-            return namespace && namespace !== chunk.name ? `${namespace}-[name]-[hash].mjs` : '[name]-[hash].mjs';
+            // ルート配下のモジュールを名前空間（namespace）ごとに1ファイルへまとめる
+            const namespace = namespaceOf(id);
+            if (namespace) {
+                return `route-${namespace}`;
+            }
         },
+        chunkFileNames: '[name]-[hash].mjs',
     },
 });
