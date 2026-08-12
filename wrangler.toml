@@ -20,6 +20,5 @@ enabled = true
 binding = "CACHE"
 
 [vars]
-
 # Environment variables can be set here or via wrangler secret
 # DEBUG_INFO = "false"
