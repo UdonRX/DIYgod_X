@@ -68,6 +68,12 @@ export default defineConfig({
     platform: 'node',
     target: 'esnext',
     treeshake: true,
+    // Rolldown / tsdown の最優先外部化フラグ
+    external: [
+        /^cloudflare:/,
+        '@cloudflare/playwright',
+        'cloudflare:workers',
+    ],
     define: {
         'process.env.NODE_ENV': JSON.stringify('production'),
         'process.env.VERCEL_ENV': JSON.stringify(''),
@@ -94,13 +100,12 @@ export default defineConfig({
     deps: {
         onlyBundle: false,
         neverBundle: [
-            // Cloudflare Workers 固有モジュールおよび不要なライブラリを除外
             /^cloudflare:/,
             '@cloudflare/playwright',
-            // Exclude non-code files that might be accidentally imported
             /\/_README$/,
             /\.node$/,
         ],
-        alwaysBundle: [/.*/],
+        // alwaysBundle から /.*/ を削除し、必要最低限（または空）にするか
+        // 特定の除外ルールを邪魔しない設定にします
     },
 });
