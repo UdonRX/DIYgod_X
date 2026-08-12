@@ -19,8 +19,9 @@ if (orphanTests.length) {
 const isWorkerBuild = process.env.WORKER_BUILD === 'true';
 
 // Ignore Redis and remote config in route generation to avoid side effects.
+// Set CACHE_TYPE to 'null' to prevent "Cache not available" error logs during registry import.
 process.env.REDIS_URL = '';
-process.env.CACHE_TYPE = '';
+process.env.CACHE_TYPE = 'null';
 process.env.REMOTE_CONFIG = '';
 
 const { ensureAllLoaded, namespaces } = await import('../../lib/registry');
