@@ -40,7 +40,10 @@ if (isWorker) {
     // No-op cache for Cloudflare Workers
     cacheModule = noopCacheModule;
 } else {
-    switch (config.cache.type) {
+    // config.cache.type が未定義の場合はデフォルトで memory を利用
+    const cacheType = config.cache.type || 'memory';
+
+    switch (cacheType) {
         case 'redis': {
             cacheModule = redis;
             cacheModule.init();
@@ -139,6 +142,10 @@ if (isWorker) {
             };
             break;
         }
+        case 'none':
+            // 意図的にキャッシュを使わない設定の場合
+            cacheModule = noopCacheModule;
+            break;
         default:
             cacheModule = noopCacheModule;
             logger.error('Cache not available, concurrent requests are not limited. This could lead to bad behavior.');
