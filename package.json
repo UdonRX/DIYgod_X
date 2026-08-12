@@ -53,7 +53,7 @@
         "vitest:fullroutes": "cross-env NODE_ENV=test FULL_ROUTES_TEST=true vitest --reporter=json --reporter=default --outputFile=\"./assets/build/test-full-routes.json\" lib/app.test.ts",
         "vitest:watch": "cross-env NODE_ENV=test vitest --watch",
         "vitest:workerd": "cross-env NODE_ENV=test vitest run --config vitest.workers.config.ts",
-        "worker-build": "npm run build:routes:worker && tsdown --config ./tsdown-worker.config.ts",
+        "worker-build": "cross-env NODE_OPTIONS='--max-old-space-size=8192' npm run build:routes:worker && cross-env NODE_OPTIONS='--max-old-space-size=8192' tsdown --config ./tsdown-worker.config.ts",
         "worker-deploy": "npm run worker-build && wrangler deploy",
         "worker-dev": "npm run worker-build && wrangler dev",
         "worker-test": "npm run worker-build && vitest run lib/worker.test.ts"
