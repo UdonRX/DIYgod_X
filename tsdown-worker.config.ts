@@ -98,14 +98,13 @@ export default defineConfig({
         '../assets/build/routes.json': path.resolve('./assets/build/routes-worker.js'),
     },
     deps: {
-        onlyBundle: false,
+        // すべての依存関係をバンドル対象として集約し、不要なチャンク分割を防止
+        inline: [/.*/],
         neverBundle: [
             /^cloudflare:/,
             '@cloudflare/playwright',
             /\/_README$/,
             /\.node$/,
         ],
-        // alwaysBundle から /.*/ を削除し、必要最低限（または空）にするか
-        // 特定の除外ルールを邪魔しない設定にします
     },
 });
