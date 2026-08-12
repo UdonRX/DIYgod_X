@@ -1,124 +1,36 @@
-import fs from 'node:fs';
-import path from 'node:path';
-
-import type { Plugin } from 'rolldown';
 import { defineConfig } from 'tsdown';
 
-// Plugin to automatically resolve .worker.ts files instead of .ts files
-function workerAliasPlugin(): Plugin {
-  return {
-    name: 'worker-alias',
-    resolveId(source, importer) {
-      // Skip if no importer (entry point) or already a .worker file
-      if (!importer || source.includes('.worker')) {
-        return null;
-      }
-
-      // Handle relative imports
-      if (source.startsWith('.')) {
-        const importerDir = path.dirname(importer);
-        const resolved = path.resolve(importerDir, source);
-
-        // Try .worker.ts and .worker.tsx variants
-        for (const ext of ['.worker.ts', '.worker.tsx']) {
-          const workerPath = resolved + ext;
-          if (fs.existsSync(workerPath)) {
-            return workerPath;
-          }
-          // Also check if source already has extension
-          const withoutExt = resolved.replace(/\.(ts|tsx)$/, '');
-          const workerPathAlt = withoutExt + ext;
-          if (fs.existsSync(workerPathAlt)) {
-            return workerPathAlt;
-          }
-        }
-      }
-
-      // Handle @/ alias imports
-      if (source.startsWith('@/')) {
-        const relativePath = source.slice(2); // Remove @/
-        const libPath = path.resolve('./lib', relativePath);
-
-        // Try .worker.ts and .worker.tsx variants
-        for (const ext of ['.worker.ts', '.worker.tsx']) {
-          const workerPath = libPath + ext;
-          if (fs.existsSync(workerPath)) {
-            return workerPath;
-          }
-          // Handle directory imports (e.g., @/utils/cache -> @/utils/cache/index.worker.ts)
-          const indexWorkerPath = path.join(libPath, 'index') + ext;
-          if (fs.existsSync(indexWorkerPath)) {
-            return indexWorkerPath;
-          }
-        }
-      }
-
-      return null;
-    },
-  };
-}
+const namespaceOf = (id: string) => id.match(/[\\/]lib[\\/]routes[\\/]([^\\/]+)[\\/]/)?.[1];
 
 export default defineConfig({
-  entry: ['./lib/worker.ts'],
-  outDir: 'dist-worker',
-  format: 'esm',
-  dts: false,
-  minify: true,
-  clean: true,
-  platform: 'node',
-  target: 'esnext',
-  treeshake: true,
-
-  // チャンク分割を無効化（1つのファイルに全コードを集約してビルド時間短縮）
-  codeSplitting: false,
-
-  // Rolldown / tsdown の最優先外部化フラグ
-  external: [
-    /^cloudflare:/,
-    '@cloudflare/playwright',
-    'cloudflare:workers',
-  ],
-
-  define: {
-    'process.env.NODE_ENV': JSON.stringify('production'),
-    'process.env.VERCEL_ENV': JSON.stringify(''),
-    'import.meta.dirname': JSON.stringify('/worker'),
-    'import.meta.url': JSON.stringify('file:///worker/index.mjs'),
-    // CommonJS compatibility
-    __dirname: JSON.stringify('/worker'),
-    __filename: JSON.stringify('/worker/index.mjs'),
-  },
-
-  plugins: [workerAliasPlugin()],
-
-  alias: {
-    // External dependencies that need Worker-compatible replacements
-    'node:module': path.resolve('./lib/shims/node-module.ts'),
-    'node:child_process': path.resolve('./lib/shims/node-child-process.ts'),
-    'dotenv/config': path.resolve('./lib/shims/dotenv-config.ts'),
-    '@sentry/node': path.resolve('./lib/shims/sentry-node.ts'),
-    '@honeybadger-io/js': path.resolve('./lib/shims/honeybadger.ts'),
-    'xxhash-wasm': path.resolve('./lib/shims/xxhash-wasm.ts'),
-    // Routes file with Worker-specific build (match relative import from lib/)
-    '../assets/build/routes.js': path.resolve('./assets/build/routes-worker.js'),
-    // routes.json is only used in test environment, but rolldown still tries to resolve it
-    '../assets/build/routes.json': path.resolve('./assets/build/routes-worker.js'),
-  },
-
-  deps: {
-    // すべての依存関係をバンドル対象として集約し、不要なチャンク分割を防止
-    inline: [/.*/],
-    neverBundle: [
-      /^cloudflare:/,
-      '@cloudflare/playwright',
-      /\/_README$/,
-      /\.node$/,
+    entry: ['./lib/index.ts'],
+    minify: true,
+    shims: true,
+    clean: true,
+    treeshake: true, // 不要なコードを完全に除去
+    codeSplitting: true, // コード分割を有効化して巨大ファイルを分散
+    copy: ['lib/assets'],
+    // 依存関係の扱いを調整（Worker環境で不要な重いライブラリをバンドルから外す）
+    deps: {
+        onlyBundle: false,
+    },
+    // Node.js固有の重いモジュールやWorker非対応パッケージを外す場合はここに指定
+    external: [
+        'jsdom',
+        'canvas',
+        'puppeteer',
+        'patchright',
     ],
-  },
-
-  // 出力・バンドルオプションの個別設定
-  output: {
-    // 動的インポート等による自動分割を抑制
-    inlineDynamicImports: true,
-  },
+    outputOptions: {
+        chunkFileNames(chunk) {
+            let namespace = chunk.facadeModuleId ? namespaceOf(chunk.facadeModuleId) : undefined;
+            if (!namespace) {
+                const namespaces = new Set(chunk.moduleIds.map((id) => namespaceOf(id)));
+                if (namespaces.size === 1) {
+                    namespace = [...namespaces][0];
+                }
+            }
+            return namespace && namespace !== chunk.name ? `${namespace}-[name]-[hash].mjs` : '[name]-[hash].mjs';
+        },
+    },
 });
