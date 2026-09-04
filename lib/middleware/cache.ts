@@ -14,6 +14,19 @@ const { h64ToString } = await xxhash();
 // XXH64 is used to shrink key size
 // plz, write these tips in comments!
 const middleware: MiddlewareHandler = async (ctx, next) => {
+    const diagnosticReadOnly = ctx.req.header('x-rsshub-history-debug-readonly') === '1';
+
+    if (diagnosticReadOnly) {
+        await next();
+        const data: Data = ctx.get('data');
+        if (ctx.res.headers.get('Cache-Control') !== 'no-cache' && data) {
+            await applyPersistentHistory(ctx, data, { readOnly: true });
+            data.lastBuildDate = new Date().toUTCString();
+            ctx.set('data', data);
+        }
+        return;
+    }
+
     if (!cacheModule.status.available || bypassList.has(ctx.req.path)) {
         await next();
         return;
@@ -27,7 +40,6 @@ const middleware: MiddlewareHandler = async (ctx, next) => {
 
     let value = await cacheModule.globalCache.get(key);
 
-    // Doesn't hit the cache? Try to become the fetcher and let others know!
     let isRequesting = false;
     if (!value) {
         isRequesting = !(await cacheModule.globalCache.claim(controlKey, config.cache.requestTimeout));
@@ -37,9 +49,7 @@ const middleware: MiddlewareHandler = async (ctx, next) => {
         let retryTimes = process.env.NODE_ENV === 'test' ? 1 : 10;
         let bypass = false;
         while (retryTimes > 0) {
-            // eslint-disable-next-line no-await-in-loop
             await new Promise((resolve) => setTimeout(resolve, process.env.NODE_ENV === 'test' ? 3000 : 6000));
-            // eslint-disable-next-line no-await-in-loop
             if ((await cacheModule.globalCache.get(controlKey)) !== '1') {
                 bypass = true;
                 break;
@@ -63,11 +73,9 @@ const middleware: MiddlewareHandler = async (ctx, next) => {
     }
 
     if (isRequesting) {
-        // waited out a stale claim without finding a cache entry, take over the fetch
         await cacheModule.globalCache.set(controlKey, '1', config.cache.requestTimeout);
     }
 
-    // let routers control cache
     ctx.set('cacheKey', key);
     ctx.set('cacheControlKey', controlKey);
 
@@ -87,8 +95,6 @@ const middleware: MiddlewareHandler = async (ctx, next) => {
         await cacheModule.globalCache.set(key, body, config.cache.routeExpire);
     }
 
-    // We need to let it go, even no cache set.
-    // Wait to set cache so the next request could be handled correctly
     await cacheModule.globalCache.set(controlKey, '0', config.cache.requestTimeout);
 };
 

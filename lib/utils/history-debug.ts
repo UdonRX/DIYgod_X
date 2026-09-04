@@ -19,14 +19,10 @@ const getHistoryOptions = () => {
 };
 
 const parseStoredItems = (value: string | null) => {
-    if (!value) {
-        return null;
-    }
+    if (!value) return null;
     try {
         const parsed = JSON.parse(value);
-        if (Array.isArray(parsed)) {
-            return parsed.length;
-        }
+        if (Array.isArray(parsed)) return parsed.length;
         const data = parsed as Data;
         return Array.isArray(data.item) ? data.item.length : null;
     } catch {
@@ -34,11 +30,31 @@ const parseStoredItems = (value: string | null) => {
     }
 };
 
+const countRenderedItems = (body: string, contentType: string) => {
+    if (contentType.includes('json')) {
+        try {
+            const parsed = JSON.parse(body);
+            if (Array.isArray(parsed?.items)) return { format: 'json', items: parsed.items.length };
+            if (Array.isArray(parsed?.item)) return { format: 'json', items: parsed.item.length };
+        } catch {
+            // Fall through to XML detection.
+        }
+    }
+
+    const rssItems = body.match(/<item(?:\s|>)/g)?.length ?? 0;
+    if (rssItems > 0 || body.includes('<rss')) return { format: 'rss', items: rssItems };
+
+    const atomEntries = body.match(/<entry(?:\s|>)/g)?.length ?? 0;
+    if (atomEntries > 0 || body.includes('<feed')) return { format: 'atom', items: atomEntries };
+
+    return { format: 'unknown', items: null };
+};
+
 const handler = async (ctx: Context) => {
     ctx.header('Cache-Control', 'no-store');
 
     const target = ctx.req.query('path');
-    if (!target || !target.startsWith('/') || target.startsWith('//') || target.includes('://')) {
+    if (!target || !target.startsWith('/') || target.startsWith('//') || target.includes('://') || target.startsWith('/debug/')) {
         return ctx.json(
             {
                 ok: false,
@@ -50,14 +66,7 @@ const handler = async (ctx: Context) => {
 
     const redisClient = cacheModule.clients.redisClient;
     if (!redisClient || !cacheModule.status.available) {
-        return ctx.json(
-            {
-                ok: false,
-                redis: 'disconnected',
-                error: 'Redis is not connected.',
-            },
-            503
-        );
+        return ctx.json({ ok: false, redis: 'disconnected', error: 'Redis is not connected.' }, 503);
     }
 
     const targetUrl = new URL(target, 'https://rsshub.local');
@@ -86,7 +95,40 @@ const handler = async (ctx: Context) => {
     const finalOutputMax = parsedLimit && parsedLimit > 0 ? Math.min(outputMax, parsedLimit) : outputMax;
     const expectedOutputItems = Math.min(historyItems, finalOutputMax);
 
-    const status = historyItems > historyMax || (cachedOutputItems !== null && cachedOutputItems > outputMax) ? 'NG' : 'OK';
+    let liveCheck: Record<string, unknown>;
+    let liveWithinMax = false;
+    try {
+        const origin = new URL(ctx.req.url).origin;
+        const liveUrl = new URL(targetUrl.pathname + targetUrl.search, origin);
+        const response = await fetch(liveUrl, {
+            headers: { 'x-rsshub-history-debug-readonly': '1' },
+            signal: AbortSignal.timeout(30_000),
+        });
+        const body = await response.text();
+        const contentType = response.headers.get('content-type') || '';
+        const rendered = countRenderedItems(body, contentType);
+        liveWithinMax = response.ok && rendered.items !== null && rendered.items <= finalOutputMax;
+        liveCheck = {
+            httpStatus: response.status,
+            contentType,
+            format: rendered.format,
+            actualOutputItems: rendered.items,
+            maxAllowedForThisRequest: finalOutputMax,
+            withinMax: liveWithinMax,
+            matchesExpected: rendered.items === null ? null : rendered.items === expectedOutputItems,
+            historyMode: response.headers.get('RSSHub-History-Status'),
+            routeCacheMode: response.headers.get('RSSHub-Cache-Status'),
+        };
+    } catch (error) {
+        liveCheck = {
+            error: error instanceof Error ? error.message : String(error),
+            withinMax: false,
+        };
+    }
+
+    const historyWithinMax = historyItems <= historyMax;
+    const cachedRssWithinMax = cachedOutputItems === null ? null : cachedOutputItems <= outputMax;
+    const status = historyWithinMax && cachedRssWithinMax !== false && liveWithinMax ? 'OK' : 'NG';
 
     return ctx.json({
         ok: status === 'OK',
@@ -106,12 +148,14 @@ const handler = async (ctx: Context) => {
             expectedOutputItems,
             routeCachePresent: routeCacheValue !== null,
             cachedItemsBeforeParameterLimit: cachedOutputItems,
+            live: liveCheck,
         },
         checks: {
-            historyWithinMax: historyItems <= historyMax,
-            cachedRssWithinMax: cachedOutputItems === null ? null : cachedOutputItems <= outputMax,
+            historyWithinMax,
+            cachedRssWithinMax,
+            liveRssWithinMax: liveWithinMax,
         },
-        note: 'This endpoint only reads Redis metadata. It does not fetch or modify the target RSS feed.',
+        note: 'The live RSS check runs the target route in read-only history/cache mode. It does not write Redis history or the normal route cache.',
     });
 };
 
