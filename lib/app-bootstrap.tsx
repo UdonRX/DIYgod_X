@@ -17,6 +17,7 @@ import sentry from '@/middleware/sentry';
 import template from '@/middleware/template';
 import trace from '@/middleware/trace';
 import registry from '@/registry';
+import historyDebug from '@/utils/history-debug';
 import logger from '@/utils/logger';
 
 process.on('uncaughtException', (e) => {
@@ -43,6 +44,10 @@ app.use(debug);
 app.use(template);
 app.use(header);
 app.use(antiHotlink);
+
+// Isolated read-only diagnostics. Registered before RSS parameter/cache middleware so it never mutates feed data or route cache.
+app.get('/debug/history', historyDebug);
+
 app.use(parameter);
 app.use(cache);
 
