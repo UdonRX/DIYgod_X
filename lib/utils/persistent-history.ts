@@ -15,18 +15,14 @@ const getPositiveInt = (value: string | undefined, fallback: number, maximum = N
 
 const isHistoryEnabled = () => {
     const value = process.env.HISTORY_CACHE_ENABLED?.toLowerCase();
-    if (value === 'false' || value === '0' || value === 'off') {
-        return false;
-    }
-    if (value === 'true' || value === '1' || value === 'on') {
-        return true;
-    }
+    if (value === 'false' || value === '0' || value === 'off') return false;
+    if (value === 'true' || value === '1' || value === 'on') return true;
     return config.cache.type === 'redis';
 };
 
 const getHistoryOptions = () => {
     const historyMax = getPositiveInt(process.env.HISTORY_CACHE_MAX, 100, 1000);
-    const outputMax = Math.min(getPositiveInt(process.env.FEED_OUTPUT_MAX, 60, 1000), historyMax);
+    const outputMax = Math.min(getPositiveInt(process.env.FEED_OUTPUT_MAX, 100, 1000), historyMax);
     const expire = getPositiveInt(process.env.HISTORY_CACHE_EXPIRE, 365 * 24 * 60 * 60);
     return { historyMax, outputMax, expire };
 };
@@ -35,12 +31,10 @@ const getHistoryKey = (ctx: Context) => {
     const url = new URL(ctx.req.url);
     url.searchParams.delete('format');
     url.searchParams.delete('limit');
-
     const query = [...url.searchParams.entries()]
         .toSorted(([keyA, valueA], [keyB, valueB]) => keyA.localeCompare(keyB) || valueA.localeCompare(valueB))
         .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
         .join('&');
-
     return 'rsshub:history:v1:' + h64ToString(ctx.req.path + (query ? `?${query}` : ''));
 };
 
@@ -75,7 +69,6 @@ export const markPersistentHistoryRouteHit = (ctx: Context, data: Data) => {
 
 export const applyPersistentHistory = async (ctx: Context, data: Data, options: { readOnly?: boolean } = {}) => {
     if (!isHistoryEnabled() || !data.item) return;
-
     const { historyMax, outputMax, expire } = getHistoryOptions();
     const redisClient = cacheModule.clients.redisClient;
 
@@ -87,7 +80,6 @@ export const applyPersistentHistory = async (ctx: Context, data: Data, options: 
     }
 
     const historyKey = getHistoryKey(ctx);
-
     try {
         const cached = await redisClient.get(historyKey);
         let previous: DataItem[] = [];
@@ -101,10 +93,7 @@ export const applyPersistentHistory = async (ctx: Context, data: Data, options: 
         }
 
         const history = mergeHistory(data.item, previous, historyMax);
-        if (!options.readOnly) {
-            await redisClient.set(historyKey, JSON.stringify(history), 'EX', expire);
-        }
-
+        if (!options.readOnly) await redisClient.set(historyKey, JSON.stringify(history), 'EX', expire);
         data.item = history.slice(0, outputMax);
         ctx.header('RSSHub-History-Status', options.readOnly ? (cached ? 'READ_ONLY_HIT' : 'READ_ONLY_MISS') : cached ? 'HIT' : 'MISS');
         ctx.header('RSSHub-History-Items', String(history.length));
