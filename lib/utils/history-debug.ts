@@ -2,10 +2,12 @@ import type { Context } from 'hono';
 import xxhash from 'xxhash-wasm';
 
 import { config } from '@/config';
-import type { Data } from '@/types';
+import type { Data, DataItem } from '@/types';
 import cacheModule from '@/utils/cache/index';
 
 const { h64ToString } = await xxhash();
+const DAY_MS = 24 * 60 * 60 * 1000;
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 const getPositiveInt = (value: string | undefined, fallback: number, maximum = Number.MAX_SAFE_INTEGER) => {
     const parsed = Number.parseInt(value || '', 10);
@@ -18,14 +20,61 @@ const getHistoryOptions = () => {
     return { historyMax, outputMax };
 };
 
-const parseStoredItems = (value: string | null) => {
+const parseStoredItems = (value: string | null): DataItem[] | null => {
     if (!value) return null;
     try {
         const parsed = JSON.parse(value);
-        if (Array.isArray(parsed)) return parsed.length;
+        if (Array.isArray(parsed)) return parsed as DataItem[];
         const data = parsed as Data;
-        return Array.isArray(data.item) ? data.item.length : null;
+        return Array.isArray(data.item) ? data.item : null;
     } catch { return null; }
+};
+
+const countStoredItems = (value: string | null) => parseStoredItems(value)?.length ?? null;
+
+const itemTime = (item: DataItem) => {
+    const value = item.pubDate || item.updated;
+    if (!value) return null;
+    const timestamp = new Date(value).getTime();
+    return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
+};
+
+const jstCoverage = (items: DataItem[]) => {
+    const shiftedNow = Date.now() + JST_OFFSET_MS;
+    const currentJstDayStartShifted = Math.floor(shiftedNow / DAY_MS) * DAY_MS;
+    const targetUtcMs = currentJstDayStartShifted - (2 * DAY_MS) - JST_OFFSET_MS;
+    const timestamps = items.map(itemTime).filter((value): value is number => value !== null).toSorted((a, b) => b - a);
+    const newest = timestamps[0] ?? null;
+    const oldest = timestamps.at(-1) ?? null;
+    const reachesTarget = oldest === null ? null : oldest <= targetUtcMs;
+
+    let approximateMissingItems: number | null = null;
+    if (reachesTarget === false && newest !== null && oldest !== null && timestamps.length >= 2 && newest > oldest) {
+        const averageIntervalMs = (newest - oldest) / (timestamps.length - 1);
+        if (Number.isFinite(averageIntervalMs) && averageIntervalMs > 0) {
+            approximateMissingItems = Math.max(1, Math.ceil((oldest - targetUtcMs) / averageIntervalMs));
+        }
+    }
+
+    const jstIso = (timestamp: number | null) => timestamp === null
+        ? null
+        : new Date(timestamp + JST_OFFSET_MS).toISOString().replace('Z', '+09:00');
+
+    return {
+        targetJst: jstIso(targetUtcMs),
+        targetUtc: new Date(targetUtcMs).toISOString(),
+        newestJst: jstIso(newest),
+        oldestJst: jstIso(oldest),
+        validTimestampItems: timestamps.length,
+        reachesTarget,
+        approximateMissingItems,
+        estimatedRequiredHistoryMax: approximateMissingItems === null ? null : items.length + approximateMissingItems,
+        note: reachesTarget === false
+            ? 'The latest stored history does not yet reach JST the day-before-yesterday 00:00. approximateMissingItems is estimated from the average interval of the stored items; increase HISTORY_CACHE_MAX only if this coverage is required.'
+            : reachesTarget === true
+              ? 'The stored history reaches JST the day-before-yesterday 00:00.'
+              : 'Coverage cannot be determined because stored history has no usable timestamps.',
+    };
 };
 
 const countRenderedItems = (body: string, contentType: string) => {
@@ -70,12 +119,13 @@ const handler = async (ctx: Context) => {
 
     let [historyValue, routeCacheValue, historyTtl] = await Promise.all([redisClient.get(historyKey), redisClient.get(routeCacheKey), redisClient.ttl(historyKey)]);
     const { historyMax, outputMax } = getHistoryOptions();
-    const historyItems = parseStoredItems(historyValue) ?? 0;
+    const history = parseStoredItems(historyValue) ?? [];
+    const historyItems = history.length;
     const parsedLimit = requestedLimit ? Number.parseInt(requestedLimit, 10) : null;
     const finalOutputMax = parsedLimit && parsedLimit > 0 ? Math.min(outputMax, parsedLimit) : outputMax;
     const expectedOutputItems = Math.min(historyItems, finalOutputMax);
 
-    let cachedOutputItems = parseStoredItems(routeCacheValue);
+    let cachedOutputItems = countStoredItems(routeCacheValue);
     let routeCacheRefreshed = false;
     const refreshRouteCache = ctx.req.query('refreshRouteCache') === '1';
     if (refreshRouteCache && routeCacheValue !== null && cachedOutputItems !== null && cachedOutputItems < expectedOutputItems) {
@@ -117,6 +167,7 @@ const handler = async (ctx: Context) => {
     return ctx.json({
         ok: status === 'OK', status, target: targetUrl.pathname + targetUrl.search, redis: 'connected',
         history: { key: historyKey, items: historyItems, max: historyMax, remainingUntilMax: Math.max(historyMax - historyItems, 0), ttlSeconds: historyTtl },
+        coverage: jstCoverage(history),
         rss: {
             configuredMax: outputMax,
             requestedLimit: parsedLimit && parsedLimit > 0 ? parsedLimit : null,
